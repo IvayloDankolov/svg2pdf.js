@@ -1622,7 +1622,7 @@ SOFTWARE.
    */
   function findFirstAvailableFontFamily(attributeState, fontFamilies) {
     var fontType = "";
-    if (attributeState.fontWeight === "bold") {
+    if (attributeState.fontWeight === "bold" || parseFloat(attributeState.fontWeight) >= 600) {
       fontType = "bold";
     }
     if (attributeState.fontStyle === "italic") {
@@ -1707,7 +1707,7 @@ SOFTWARE.
     if (attributeState.fontWeight !== parentAttributeState.fontWeight
         || attributeState.fontStyle !== parentAttributeState.fontStyle) {
       var fontType = "";
-      if (attributeState.fontWeight === "bold") {
+      if (attributeState.fontWeight === "bold" || parseFloat(attributeState.fontWeight) >= 600) {
         fontType = "bold";
       }
       if (attributeState.fontStyle === "italic") {
