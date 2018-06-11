@@ -6,7 +6,7 @@
  *   license: MIT (http://opensource.org/licenses/MIT)
  *   author: yFiles for HTML Support Team <yfileshtml@yworks.com>
  *   homepage: https://github.com/yWorks/svg2pdf.js#readme
- *   version: 1.2.1
+ *   version: 1.2.2
  *
  * font-family:
  *   license: MIT (http://opensource.org/licenses/MIT)
@@ -2369,7 +2369,7 @@ SOFTWARE.
 
   // replace any newline characters by space and trim
   var removeNewlinesAndTrim = function (str) {
-    return str.replace(/[\n\s\r]+/, " ").trim();
+    return str.replace(/[\n\s\r]+/g, " ").trim();
   };
 
   // clones the defs object (or basically any object)
@@ -2598,7 +2598,7 @@ SOFTWARE.
     var i, minX, minY, maxX, maxY, viewBox, vb, boundingBox;
     var pf = parseFloat;
 
-    if (nodeIs(node, "polygon")) {
+    if (nodeIs(node, "polygon,polyline")) {
       var points = parsePointsString(node.getAttribute("points"));
       minX = Number.POSITIVE_INFINITY;
       minY = Number.POSITIVE_INFINITY;
@@ -2735,7 +2735,7 @@ SOFTWARE.
         pf(node.getAttribute("width")) || (vb && vb[2]) || 0,
         pf(node.getAttribute("height")) || (vb && vb[3]) || 0
       ];
-    } else if (nodeIs(node, "g")) {
+    } else if (nodeIs(node, "g,clippath")) {
       boundingBox = [0, 0, 0, 0];
       forEachChild(node, function (i, node) {
         var nodeBox = getUntransformedBBox(node);
@@ -2816,14 +2816,22 @@ SOFTWARE.
   };
 
   // draws a polygon
-  var polygon = function (node, colorMode, gradient, gradientMatrix, svgIdPrefix, attributeState) {
+  var polygon = function (node, colorMode, gradient, gradientMatrix, svgIdPrefix, attributeState, closed) {
+    if (!node.hasAttribute("points") || node.getAttribute("points") === "") {
+      return;
+    }
+
     var points = parsePointsString(node.getAttribute("points"));
     var lines = [{op: "m", c: points[0]}];
     var i, angle;
     for (i = 1; i < points.length; i++) {
       lines.push({op: "l", c: points[i]});
     }
-    lines.push({op: "h"});
+
+    if (closed) {
+      lines.push({op: "h"});
+    }
+
     _pdf.path(lines, colorMode, gradient, gradientMatrix);
 
     var markerEnd = node.getAttribute("marker-end"),
@@ -2879,7 +2887,7 @@ SOFTWARE.
 
       var parser = new DOMParser();
       var svgElement = parser.parseFromString(svgText, "image/svg+xml").firstElementChild;
-      renderNode(svgElement, _pdf.unitMatrix, {}, svgIdPrefix, false, AttributeState.default());
+      renderNode(svgElement, _pdf.unitMatrix, {}, svgIdPrefix, false, false, AttributeState.default());
       return;
     }
 
@@ -2905,7 +2913,7 @@ SOFTWARE.
   };
 
   // draws a path
-  var path = function (node, svgIdPrefix, colorMode, gradient, gradientMatrix, attributeState) {
+  var path = function (node, tfMatrix, svgIdPrefix, colorMode, gradient, gradientMatrix, withinClipPath, attributeState) {
     var list = getPathSegList(node);
     var markerEnd = node.getAttribute("marker-end"),
         markerStart = node.getAttribute("marker-start"),
@@ -3050,6 +3058,13 @@ SOFTWARE.
 
           prevX = x;
           prevY = y;
+
+          if (withinClipPath) {
+            p2 = multVecMatrix(p2, tfMatrix);
+            p3 = multVecMatrix(p3, tfMatrix);
+            to = multVecMatrix(to, tfMatrix);
+          }
+
           lines.push({
             op: "c", c: [
               p2[0], p2[1],
@@ -3068,6 +3083,10 @@ SOFTWARE.
             markers.addMarker(new Marker(markerMid, [x, y], Math.atan2(angle[1], angle[0])));
           }
           prevAngle = curAngle;
+
+          if (withinClipPath) {
+            to = multVecMatrix(to, tfMatrix);
+          }
 
           lines.push({op: op, c: to});
         }
@@ -3366,9 +3385,14 @@ SOFTWARE.
       xs[i] = x;
       ys[i] = y;
 
+      currentTextX = x + measureTextWidth(this.texts[i], tSpanAttributeState);
+
       // add an additional "." (which has approximately the same size as a space character) in order to put
       // some space between the tSpans (I can't find this in the spec but all browsers do it)
-      currentTextX = x + measureTextWidth(this.texts[i], tSpanAttributeState) + measureTextWidth(".", tSpanAttributeState);
+      if (i < this.tSpans.length - 1) {
+        currentTextX += measureTextWidth(".", tSpanAttributeState);
+      }
+
       currentTextY = y;
 
       minX = Math.min(minX, x);
@@ -3500,7 +3524,7 @@ SOFTWARE.
   var findAndRenderDefs = function (node, tfMatrix, defs, svgIdPrefix, withinDefs, attributeState) {
     forEachChild(node, function (i, child) {
       if (child.tagName.toLowerCase() === "defs") {
-        renderNode(child, tfMatrix, defs, svgIdPrefix, withinDefs, attributeState);
+        renderNode(child, tfMatrix, defs, svgIdPrefix, withinDefs, false, attributeState);
         // prevent defs from being evaluated twice // TODO: make this better
         child.parentNode.removeChild(child);
       }
@@ -3513,13 +3537,13 @@ SOFTWARE.
     var newSvgIdPrefix = svgIdPrefix.nextChild();
     var newDefs = cloneDefs(defs);
     findAndRenderDefs(node, tfMatrix, newDefs, newSvgIdPrefix, withinDefs, attributeState);
-    renderChildren(node, tfMatrix, newDefs, newSvgIdPrefix, withinDefs, attributeState);
+    renderChildren(node, tfMatrix, newDefs, newSvgIdPrefix, withinDefs, false, attributeState);
   };
 
   // renders all children of a node
-  var renderChildren = function (node, tfMatrix, defs, svgIdPrefix, withinDefs, attributeState) {
+  var renderChildren = function (node, tfMatrix, defs, svgIdPrefix, withinDefs, withinClipPath, attributeState) {
     forEachChild(node, function (i, node) {
-      renderNode(node, tfMatrix, defs, svgIdPrefix, withinDefs, attributeState);
+      renderNode(node, tfMatrix, defs, svgIdPrefix, withinDefs, withinClipPath, attributeState);
     });
   };
 
@@ -3568,9 +3592,19 @@ SOFTWARE.
 
     _pdf.beginTilingPattern(pattern);
     // continue without transformation
-    renderChildren(node, _pdf.unitMatrix, defs, svgIdPrefix, false, attributeState);
+    renderChildren(node, _pdf.unitMatrix, defs, svgIdPrefix, false, false, attributeState);
     _pdf.endTilingPattern(id, pattern);
   };
+
+  /**
+   * @param {Element} node
+   * @param {Object.<String,Element>} defs
+   * @param {SvgPrefix} svgIdPrefix
+   */
+  function clipPath(node, defs, svgIdPrefix) {
+    var id = svgIdPrefix.get() + node.getAttribute("id");
+    defs[id] = node;
+  }
 
   var jsPDFFontAliases = ["sans-serif", "verdana", "arial", "helvetica", "fixed", "monospace", "terminal", "courier",
     "serif", "cursive", "fantasy", "times"];
@@ -3582,7 +3616,7 @@ SOFTWARE.
    */
   function findFirstAvailableFontFamily(attributeState, fontFamilies) {
     var fontType = "";
-    if (attributeState.fontWeight === "bold") {
+    if (attributeState.fontWeight === "bold" || parseFloat(attributeState.fontWeight) >= 600) {
       fontType = "bold";
     }
     if (attributeState.fontStyle === "italic") {
@@ -3667,7 +3701,7 @@ SOFTWARE.
     if (attributeState.fontWeight !== parentAttributeState.fontWeight
         || attributeState.fontStyle !== parentAttributeState.fontStyle) {
       var fontType = "";
-      if (attributeState.fontWeight === "bold") {
+      if (attributeState.fontWeight === "bold" || parseFloat(attributeState.fontWeight) >= 600) {
         fontType = "bold";
       }
       if (attributeState.fontStyle === "italic") {
@@ -3694,9 +3728,10 @@ SOFTWARE.
    * @param defs The defs map holding all svg nodes that can be referenced
    * @param svgIdPrefix The current id prefix
    * @param withinDefs True iff we are top-level within a defs node, so the target can be switched to an pdf form object
+   * @param {boolean} withinClipPath
    * @param {AttributeState} attributeState Keeps track of parent attributes that are inherited automatically
    */
-  var renderNode = function (node, contextTransform, defs, svgIdPrefix, withinDefs, attributeState) {
+  var renderNode = function (node, contextTransform, defs, svgIdPrefix, withinDefs, withinClipPath, attributeState) {
     var parentAttributeState = attributeState;
     attributeState = attributeState.clone();
 
@@ -3724,7 +3759,7 @@ SOFTWARE.
 
     // if we are within a defs node, start a new pdf form object and draw this node and all children on that instead
     // of the top-level page
-    var targetIsFormObject = withinDefs && !nodeIs(node, "lineargradient,radialgradient,pattern");
+    var targetIsFormObject = withinDefs && !nodeIs(node, "lineargradient,radialgradient,pattern,clippath");
     if (targetIsFormObject) {
 
       // the transformations directly at the node are written to the pdf form object transformation matrix
@@ -3739,7 +3774,41 @@ SOFTWARE.
 
     } else {
       tfMatrix = _pdf.matrixMult(computeNodeTransform(node), contextTransform);
+
+      if (!withinClipPath) {
+        _pdf.saveGraphicsState();
+      }
+    }
+
+    var hasClipPath = node.hasAttribute("clip-path") && node.getAttribute("clip-path") !== "none";
+    if (hasClipPath) {
+      var clipPathId = iriReference.exec(node.getAttribute("clip-path"));
+      var clipPathNode = getFromDefs(svgIdPrefix.get() + clipPathId[1], defs);
+
+      var clipPathMatrix = tfMatrix;
+      if (clipPathNode.hasAttribute("clipPathUnits")
+          && clipPathNode.getAttribute("clipPathUnits").toLowerCase() === "objectboundingbox") {
+        bBox = getUntransformedBBox(node);
+        clipPathMatrix = _pdf.matrixMult(new _pdf.Matrix(bBox[2], 0, 0, bBox[3], bBox[0], bBox[1]), clipPathMatrix);
+      }
+
+      // here, browsers show different results for a "transform" attribute on the clipPath element itself:
+      // IE/Edge considers it, Chrome and Firefox ignore it. However, the specification lists "transform" as a valid
+      // attribute for clipPath elements, although not explicitly explaining its behavior. This implementation follows
+      // IE/Edge and considers the "transform" attribute as additional transformation within the coordinate system
+      // established by the "clipPathUnits" attribute.
+      clipPathMatrix = _pdf.matrixMult(computeNodeTransform(clipPathNode), clipPathMatrix);
+
       _pdf.saveGraphicsState();
+      _pdf.setCurrentTransformationMatrix(clipPathMatrix);
+
+      _pdf.beginClipPath();
+      renderChildren(clipPathNode, _pdf.unitMatrix, defs, svgIdPrefix, false, true, attributeState);
+      _pdf.endClipPath();
+
+      // as we cannot use restoreGraphicsState() to reset the transform (this would reset the clipping path, as well),
+      // we must append the inverse instead
+      _pdf.setCurrentTransformationMatrix(clipPathMatrix.inversed());
     }
 
     //
@@ -3747,7 +3816,7 @@ SOFTWARE.
     //
 
     // fill mode
-    if (nodeIs(node, "g,path,rect,text,ellipse,line,circle,polygon")) {
+    if (nodeIs(node, "g,path,rect,text,ellipse,line,circle,polygon,polyline")) {
       function setDefaultColor() {
         fillRGB = new RGBColor("rgb(0, 0, 0)");
         hasFillColor = true;
@@ -3884,7 +3953,7 @@ SOFTWARE.
 
     }
 
-    if (nodeIs(node, "g,path,rect,ellipse,line,circle,polygon")) {
+    if (nodeIs(node, "g,path,rect,ellipse,line,circle,polygon,polyline")) {
       // text has no fill color, so don't apply it until here
       if (hasFillColor) {
         attributeState.fill = fillRGB;
@@ -3953,11 +4022,11 @@ SOFTWARE.
         findAndRenderDefs(node, tfMatrix, defs, svgIdPrefix, withinDefs, attributeState);
       case 'a':
       case "marker":
-        renderChildren(node, tfMatrix, defs, svgIdPrefix, withinDefs, attributeState);
+        renderChildren(node, tfMatrix, defs, svgIdPrefix, withinDefs, false, attributeState);
         break;
 
       case 'defs':
-        renderChildren(node, tfMatrix, defs, svgIdPrefix, true, attributeState);
+        renderChildren(node, tfMatrix, defs, svgIdPrefix, true, false, attributeState);
         break;
 
       case 'use':
@@ -3965,22 +4034,30 @@ SOFTWARE.
         break;
 
       case 'line':
-        _pdf.setCurrentTransformationMatrix(tfMatrix);
-        line(node, svgIdPrefix, attributeState);
+        if (!withinClipPath) {
+          _pdf.setCurrentTransformationMatrix(tfMatrix);
+          line(node, svgIdPrefix, attributeState);
+        }
         break;
 
       case 'rect':
-        _pdf.setCurrentTransformationMatrix(tfMatrix);
+        if (!withinClipPath) {
+          _pdf.setCurrentTransformationMatrix(tfMatrix);
+        }
         rect(node, colorMode, fillUrl, fillData);
         break;
 
       case 'ellipse':
-        _pdf.setCurrentTransformationMatrix(tfMatrix);
+        if (!withinClipPath) {
+          _pdf.setCurrentTransformationMatrix(tfMatrix);
+        }
         ellipse(node, colorMode, fillUrl, fillData);
         break;
 
       case 'circle':
-        _pdf.setCurrentTransformationMatrix(tfMatrix);
+        if (!withinClipPath) {
+          _pdf.setCurrentTransformationMatrix(tfMatrix);
+        }
         circle(node, colorMode, fillUrl, fillData);
         break;
       case 'text':
@@ -3988,13 +4065,18 @@ SOFTWARE.
         break;
 
       case 'path':
-        _pdf.setCurrentTransformationMatrix(tfMatrix);
-        path(node, svgIdPrefix, colorMode, fillUrl, fillData, attributeState);
+        if (!withinClipPath) {
+          _pdf.setCurrentTransformationMatrix(tfMatrix);
+        }
+        path(node, tfMatrix, svgIdPrefix, colorMode, fillUrl, fillData, withinClipPath, attributeState);
         break;
 
       case 'polygon':
-        _pdf.setCurrentTransformationMatrix(tfMatrix);
-        polygon(node, colorMode, fillUrl, fillData, svgIdPrefix, attributeState);
+      case 'polyline':
+        if (!withinClipPath) {
+          _pdf.setCurrentTransformationMatrix(tfMatrix);
+        }
+        polygon(node, colorMode, fillUrl, fillData, svgIdPrefix, attributeState, node.tagName.toLowerCase() === "polygon");
         break;
 
       case 'image':
@@ -4025,12 +4107,20 @@ SOFTWARE.
       case "pattern":
         pattern(node, defs, svgIdPrefix, attributeState);
         break;
+
+      case "clippath":
+        clipPath(node, defs, svgIdPrefix);
+        break;
     }
 
     // close either the formObject or the graphics context
     if (targetIsFormObject) {
       _pdf.endFormObject(svgIdPrefix.get() + node.getAttribute("id"));
-    } else {
+    } else if (!withinClipPath) {
+      _pdf.restoreGraphicsState();
+    }
+
+    if (hasClipPath) {
       _pdf.restoreGraphicsState();
     }
   };
@@ -4056,7 +4146,7 @@ SOFTWARE.
     _pdf.setFontSize(attributeState.fontSize);
 
     // start rendering
-    renderNode(element.cloneNode(true), _pdf.unitMatrix, {}, new SvgPrefix(""), false, attributeState);
+    renderNode(element.cloneNode(true), _pdf.unitMatrix, {}, new SvgPrefix(""), false, false, attributeState);
 
     _pdf.restoreGraphicsState();
 
