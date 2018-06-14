@@ -882,6 +882,11 @@ SOFTWARE.
   var image = function (node, svgIdPrefix) {
     var imageUrl = node.getAttribute("xlink:href") || node.getAttribute("href");
 
+    var width = parseFloat(node.getAttribute("width")),
+    height = parseFloat(node.getAttribute("height")),
+    x = parseFloat(node.getAttribute("x") || 0),
+    y = parseFloat(node.getAttribute("y") || 0);
+
     var dataUrl = imageUrl.match(dataUrlRegex);
     if (dataUrl && dataUrl[2] === "image/svg+xml") {
       var svgText = dataUrl[5];
@@ -893,14 +898,18 @@ SOFTWARE.
 
       var parser = new DOMParser();
       var svgElement = parser.parseFromString(svgText, "image/svg+xml").firstElementChild;
+
+      var box = svgElement.viewBox.baseVal;
+      var sx = width / box.width;
+      var sy = height / box.height;
+      var transformString = "scale(" + sx + ", " + sy + ")";
+      svgElement.setAttribute("x", x);
+      svgElement.setAttribute("y", y);
+      svgElement.setAttribute("transform", transformString);
+
       renderNode(svgElement, _pdf.unitMatrix, {}, svgIdPrefix, false, false, AttributeState.default());
       return;
     }
-
-    var width = parseFloat(node.getAttribute("width")),
-        height = parseFloat(node.getAttribute("height")),
-        x = parseFloat(node.getAttribute("x") || 0),
-        y = parseFloat(node.getAttribute("y") || 0);
 
     try {
       _pdf.addImage(
